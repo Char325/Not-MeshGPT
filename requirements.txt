@@ -1,0 +1,11 @@
+numpy
+trimesh
+open3d
+tqdm
+torch
+matplotlib
+scipy
+matplotlib 
+scikit-learn
+torchvision 
+torchaudio
