@@ -1,9 +1,12 @@
+# train_ae.py
+
 import os
 import torch
 from torch.utils.data import DataLoader
+from torch import optim
+
 from scripts.pytorch_ds import ModelNet10PC
 from scripts.point_cloud_autoen2 import PointNetAE, chamfer_distance
-from torch.optim import Adam
 
 
 def get_device():
@@ -11,67 +14,62 @@ def get_device():
         return torch.device("mps")
     elif torch.cuda.is_available():
         return torch.device("cuda")
-    return torch.device("cpu")
+    else:
+        return torch.device("cpu")
 
 
 def main():
+    data_root = "data/modelnet10_pc_2048"  # adjust if needed
 
-    data_root = "data/modelnet10_pc_2048"
     device = get_device()
     print("Using device:", device)
 
-    # Build dataset: exact 70/10/20 split
-    train_ds = ModelNet10PC(data_root, split="train")
-    val_ds   = ModelNet10PC(data_root, split="val")
+    # Dataset & DataLoader
+    dataset = ModelNet10PC(data_root)
+    print("Total samples:", len(dataset))
 
-    print(f"Train samples: {len(train_ds)}")
-    print(f"Val samples:   {len(val_ds)}")
+    dataloader = DataLoader(
+        dataset,
+        batch_size=4,      # keep small for Chamfer + cdist
+        shuffle=True,
+        num_workers=0,     # set >0 on Linux if you like
+        drop_last=True
+    )
 
-    train_loader = DataLoader(train_ds, batch_size=4, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=4, shuffle=False)
+    num_points = 2048
+    latent_dim = 256
 
-    # AE
-    model = PointNetAE(num_points=2048, latent_dim=256).to(device)
-    optimizer = Adam(model.parameters(), lr=1e-3)
+    model = PointNetAE(num_points=num_points, latent_dim=latent_dim).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
     num_epochs = 80
 
+    model.train()
     for epoch in range(1, num_epochs + 1):
-        # ---- TRAIN ----
-        model.train()
-        train_loss = 0.0
+        epoch_loss = 0.0
+        for i, batch in enumerate(dataloader):
+            # batch: (B, N, 3)
+            batch = batch.to(device)
 
-        for pc in train_loader:
-            pc = pc.to(device)
             optimizer.zero_grad()
+            recon, z = model(batch)
+            loss = chamfer_distance(batch, recon)
 
-            recon, _ = model(pc)
-            loss = chamfer_distance(pc, recon)
             loss.backward()
             optimizer.step()
 
-            train_loss += loss.item()
+            epoch_loss += loss.item()
 
-        train_loss /= len(train_loader)
+            if (i + 1) % 20 == 0:
+                print(f"Epoch {epoch} | Step {i+1}/{len(dataloader)} | Loss: {loss.item():.6f}")
 
-        # ---- VALIDATION ----
-        model.eval()
-        val_loss = 0.0
+        avg_loss = epoch_loss / len(dataloader)
+        print(f"==> Epoch {epoch}/{num_epochs} | Avg Loss: {avg_loss:.6f}")
 
-        with torch.no_grad():
-            for pc in val_loader:
-                pc = pc.to(device)
-                recon, _ = model(pc)
-                val_loss += chamfer_distance(pc, recon).item()
-
-        val_loss /= len(val_loader)
-
-        print(f"Epoch {epoch}/{num_epochs} | Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f}")
-
-        os.makedirs("checkpoints_transformer_pp", exist_ok=True)
-    torch.save(model.state_dict(), f"checkpoints_transformer_pp/transformer_foldingpp_epoch{epoch}.pth")
+        # save a checkpoint every few epochs
+        os.makedirs("checkpoints", exist_ok=True)
+        torch.save(model.state_dict(), f"checkpoints/pointnet_ae_epoch{epoch}.pth")
 
 
 if __name__ == "__main__":
     main()
-
