@@ -62,6 +62,3 @@ class ModelNet10PC(Dataset):
         pc = pc / np.max(np.linalg.norm(pc, axis=1))
 
         return pc
-
-
-
