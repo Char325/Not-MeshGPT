@@ -1,17 +1,9 @@
-# train_transformer_ae.py
-
 import os
 import torch
 from torch.utils.data import DataLoader
-from torch import optim
-
 from scripts.pytorch_ds import ModelNet10PC
-from scripts.transformer_folding_ae import (
-    TransformerFoldingAE,
-    chamfer_distance,
-    repulsion_loss,
-    smoothness_loss,
-)
+from scripts.point_cloud_autoen2 import PointNetAE, chamfer_distance
+from torch.optim import Adam
 
 
 def get_device():
@@ -23,84 +15,61 @@ def get_device():
 
 
 def main():
-    data_root = "data/modelnet10_pc_2048"
 
+    data_root = "data/modelnet10_pc_2048"
     device = get_device()
     print("Using device:", device)
 
-    dataset = ModelNet10PC(data_root)
-    print("Total samples:", len(dataset))
+    # Build dataset: exact 70/10/20 split
+    train_ds = ModelNet10PC(data_root, split="train")
+    val_ds   = ModelNet10PC(data_root, split="val")
 
-    dataloader = DataLoader(
-        dataset,
-        batch_size=2,        # transformers are memory-hungry
-        shuffle=True,
-        num_workers=0,
-        drop_last=True,
-    )
+    print(f"Train samples: {len(train_ds)}")
+    print(f"Val samples:   {len(val_ds)}")
 
-    num_points = 2048
-    d_model = 128
-    latent_dim = 128
+    train_loader = DataLoader(train_ds, batch_size=4, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=4, shuffle=False)
 
-    model = TransformerFoldingAE(
-        num_points=num_points,
-        d_model=d_model,
-        latent_dim=latent_dim,
-        num_layers=4,
-        nhead=4,
-        dim_feedforward=256,
-    ).to(device)
+    # AE
+    model = PointNetAE(num_points=2048, latent_dim=256).to(device)
+    optimizer = Adam(model.parameters(), lr=1e-3)
 
-    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    num_epochs = 80
 
-    # loss weights
-    w_chamfer = 1.0
-    w_repulse = 0.1
-    w_smooth = 0.05
-
-    num_epochs = 100
-
-    model.train()
     for epoch in range(1, num_epochs + 1):
-        epoch_loss = 0.0
-        for i, batch in enumerate(dataloader):
-            batch = batch.to(device)           # (B,N,3)
+        # ---- TRAIN ----
+        model.train()
+        train_loss = 0.0
 
+        for pc in train_loader:
+            pc = pc.to(device)
             optimizer.zero_grad()
-            recon, _ = model(batch)
 
-            loss_chamfer = chamfer_distance(batch, recon)
-            loss_repulse = repulsion_loss(recon)
-            loss_smooth = smoothness_loss(recon)
-
-            loss = (
-                w_chamfer * loss_chamfer
-                + w_repulse * loss_repulse
-                + w_smooth * loss_smooth
-            )
-
+            recon, _ = model(pc)
+            loss = chamfer_distance(pc, recon)
             loss.backward()
             optimizer.step()
 
-            epoch_loss += loss.item()
-            if (i + 1) % 20 == 0:
-                print(
-                    f"Epoch {epoch} | Step {i+1}/{len(dataloader)} | "
-                    f"Loss: {loss.item():.6f} "
-                    f"(Chamfer={loss_chamfer.item():.6f}, "
-                    f"Repulse={loss_repulse.item():.6f}, "
-                    f"Smooth={loss_smooth.item():.6f})"
-                )
+            train_loss += loss.item()
 
-        avg_loss = epoch_loss / len(dataloader)
-        print(f"==> Epoch {epoch}/{num_epochs} | Avg Loss: {avg_loss:.6f}")
+        train_loss /= len(train_loader)
+
+        # ---- VALIDATION ----
+        model.eval()
+        val_loss = 0.0
+
+        with torch.no_grad():
+            for pc in val_loader:
+                pc = pc.to(device)
+                recon, _ = model(pc)
+                val_loss += chamfer_distance(pc, recon).item()
+
+        val_loss /= len(val_loader)
+
+        print(f"Epoch {epoch}/{num_epochs} | Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f}")
 
         os.makedirs("checkpoints_transformer_pp", exist_ok=True)
-        torch.save(
-            model.state_dict(),
-            f"checkpoints_transformer_pp/transformer_foldingpp_epoch{epoch}.pth",
-        )
+    torch.save(model.state_dict(), f"checkpoints_transformer_pp/transformer_foldingpp_epoch{epoch}.pth")
 
 
 if __name__ == "__main__":
