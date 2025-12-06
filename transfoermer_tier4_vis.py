@@ -44,7 +44,7 @@ def main():
     device = get_device()
     print("Using device:", device)
 
-    dataset = ModelNet10PC("data/modelnet10_pc_2048")
+    dataset = ModelNet10PC("data/modelnet10_pc_2048", split = 'test')
     print("Total samples:", len(dataset))
 
     idx = np.random.randint(0, len(dataset))
@@ -60,7 +60,7 @@ def main():
     ).to(device)
 
     model.load_state_dict(torch.load(
-        "/users/cnaraya2/mesh-dl/checkpoints_transformer_pp/transformer_foldingpp_epoch100.pth",
+        "checkpoints_transformer_pp/transformer_foldingpp_epoch99.pth",
         map_location=device,
     ))
     model.eval()
